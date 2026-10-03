@@ -1,4 +1,4 @@
-# CodeBaseAI 🧠
+# CodeBaseAI 
 
 > A codebase-intelligence chatbot that ingests any Python GitHub repository and lets you ask questions about it — with citations.
 
