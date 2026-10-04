@@ -26,7 +26,8 @@ def _extract_lines(filepath: str, start: int, end: int) -> str:
     """Read the raw source lines for a given line range."""
     try:
         lines = Path(filepath).read_text(encoding="utf-8", errors="replace").splitlines()
-        return "\n".join(lines[start - 1 : end])
+        start_idx = max(0, start - 1)
+        return "\n".join(lines[start_idx : end])
     except Exception:
         return ""
 
@@ -69,7 +70,11 @@ def chunk_parsed_file(parsed_file: ParsedFile) -> list[CodeChunk]:
                         start_line=method.start_line,
                         end_line=method.end_line,
                         code=_extract_lines(filepath, method.start_line, method.end_line),
-                        metadata={"class": cls.name, "calls": method.calls},
+                        metadata={
+                            "class": cls.name,
+                            "calls": method.calls,
+                            "docstring": method.docstring,
+                        },
                     )
                 )
         else:
@@ -100,3 +105,4 @@ def chunk_to_dict(chunk: CodeChunk) -> dict:
         "code": chunk.code,
         **chunk.metadata,
     }
+
