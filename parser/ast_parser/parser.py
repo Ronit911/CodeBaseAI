@@ -48,28 +48,36 @@ def _extract_calls(node: ast.AST) -> list[str]:
                 calls.append(child.func.id)
             elif isinstance(child.func, ast.Attribute):
                 calls.append(child.func.attr)
-    return calls
+    return list(dict.fromkeys(calls))  # deduplicate, preserve order
 
 
 def _parse_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> FunctionInfo:
+    start_line = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+    end_line = node.end_lineno or node.lineno
+    if end_line < start_line:
+        end_line = start_line
     return FunctionInfo(
         name=node.name,
-        start_line=node.lineno,
-        end_line=node.end_lineno or node.lineno,
+        start_line=start_line,
+        end_line=end_line,
         docstring=ast.get_docstring(node),
         calls=_extract_calls(node),
     )
 
 
 def _parse_class(node: ast.ClassDef) -> ClassInfo:
+    start_line = node.decorator_list[0].lineno if node.decorator_list else node.lineno
+    end_line = node.end_lineno or node.lineno
+    if end_line < start_line:
+        end_line = start_line
     methods = []
     for item in node.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             methods.append(_parse_function(item))
     return ClassInfo(
         name=node.name,
-        start_line=node.lineno,
-        end_line=node.end_lineno or node.lineno,
+        start_line=start_line,
+        end_line=end_line,
         methods=methods,
     )
 
@@ -83,31 +91,51 @@ def _parse_imports(node: ast.AST) -> list[str]:
         elif isinstance(child, ast.ImportFrom):
             if child.module:
                 imports.append(child.module)
+            else:
+                for alias in child.names:
+                    imports.append(alias.name)
     return list(dict.fromkeys(imports))  # deduplicate, preserve order
 
 
-def parse_file(filepath: Path) -> ParsedFile:
+def _extract_top_level_calls(node: ast.AST) -> list[str]:
+    """Collect Call names from top-level statements, excluding function/class bodies."""
+    calls = []
+    stack = [node]
+    while stack:
+        curr = stack.pop()
+        if isinstance(curr, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(curr, ast.Call):
+            if isinstance(curr.func, ast.Name):
+                calls.append(curr.func.id)
+            elif isinstance(curr.func, ast.Attribute):
+                calls.append(curr.func.attr)
+        stack.extend(ast.iter_child_nodes(curr))
+    return calls
+
+
+def parse_file(filepath: Path | str) -> ParsedFile:
     """Parse a single Python file and return a structured ParsedFile."""
-    source = filepath.read_text(encoding="utf-8", errors="replace")
+    filepath = Path(filepath)
     try:
+        source = filepath.read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(source, filename=str(filepath))
-    except SyntaxError:
+    except Exception:
         return ParsedFile(file=str(filepath))
 
     parsed = ParsedFile(file=str(filepath))
     parsed.imports = _parse_imports(tree)
 
+    top_level_calls = []
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef):
             parsed.classes.append(_parse_class(node))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             parsed.functions.append(_parse_function(node))
-        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-            # Top-level calls
-            call = node.value
-            if isinstance(call.func, ast.Name):
-                parsed.calls.append(call.func.id)
+        else:
+            top_level_calls.extend(_extract_top_level_calls(node))
 
+    parsed.calls = list(dict.fromkeys(top_level_calls))  # deduplicate, preserve order
     return parsed
 
 
@@ -135,6 +163,7 @@ def parsed_file_to_dict(pf: ParsedFile) -> dict:
                         "name": m.name,
                         "start_line": m.start_line,
                         "end_line": m.end_line,
+                        "docstring": m.docstring,
                         "calls": m.calls,
                     }
                     for m in c.methods
@@ -145,3 +174,4 @@ def parsed_file_to_dict(pf: ParsedFile) -> dict:
         "imports": pf.imports,
         "calls": pf.calls,
     }
+
